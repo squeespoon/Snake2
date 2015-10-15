@@ -184,7 +184,7 @@ int CBaftermove(int x,int y){
 
 int dfsPath(int x,int y,int round,int maxDep=4){
 //	cout<<"dfsing "<<x<<" "<<y<<endl;
-	if(round+2>game.round+maxDep){
+	if(round>=game.round+maxDep-1){
 		return CB(x,y)+1;
 	} 
 	int tmp=invalid[x][y];
@@ -202,8 +202,6 @@ int dfsPath(int x,int y,int round,int maxDep=4){
 	invalid[x][y]=tmp;
 	return res;
 }
-
-
 
 
 
