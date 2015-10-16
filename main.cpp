@@ -85,7 +85,7 @@ bool whetherGrow(int num)  //本回合是否生长
 //createRound 回合生成的身体在第几回合消失
 int whenDisappear(int createRound){
 	if(createRound==0)return 0;
-	return 26+createRound+createRound/3;
+	return 26+createRound+(createRound-1)/2;
 }
 
 void deleteEnd(int id)     //删除蛇尾
@@ -172,8 +172,10 @@ bool canMove(int x,int y,int round){
     //cout<<"in canmove "<<x<<" "<<y<<" "<<round<<endl;
     if(x>n || y>m || x<1 || y<1)return false;
     if(invalid[x][y]==INF)return false;
-    if( round>whenDisappear(invalid[x][y]) ){
-        //cout<<"?inv is"<<invalid[x][y]<<" "<<whenDisappear(invalid[x][y]) <<" -- round is"<<round<<" --";
+    if(invalid[x][y]==0){
+    	return true;
+	}else if( round>=whenDisappear(invalid[x][y]) ){
+        cout<<"?inv is"<<invalid[x][y]<<" "<<whenDisappear(invalid[x][y]) <<" -- round is"<<round<<" --"<<endl;
         return true;
     }
     if(invalid[x][y]>game.round && invalid[x][y]>round){
@@ -216,10 +218,10 @@ int dfsMyPath(int x,int y,int round,int maxDep,bool flag);
  * x:横坐标, y:纵坐标 round:当前回合 maxDep:最大深度 flag:是否内嵌dfs
  */
 int dfsMyPath(int x,int y,int round,int maxDep,bool flag){
-	//cout<<"dfsing my path "<<x<<","<<y<<" round"<<round<<endl;
+//	cout<<"dfsing my path "<<x<<","<<y<<" round"<<round<<endl;
 	int tmp=invalid[x][y];
 	invalid[x][y]=round;
-	if(round>=game.round+maxDep-1){
+	if(round>=game.round+maxDep){
 		if(flag){               //搜对方
             point p = opponentHead();
             invalid[x][y]=tmp;
@@ -227,7 +229,7 @@ int dfsMyPath(int x,int y,int round,int maxDep,bool flag){
         }else{
             //cout<<"dfs my path end. now score is "<<CB(x,y)+1<<endl;
             invalid[x][y]=tmp;
-            return CB(x,y)+1;   //返回评分
+            return (1<<maxDep)*(CB(x,y)+maxDep);   //返回评分
         }
 	}
 
@@ -250,6 +252,9 @@ int dfsMyPath(int x,int y,int round,int maxDep,bool flag){
 
 	}
 	invalid[x][y]=tmp;
+	if(!flag&&res==0){	//我无路可走 
+		return dfsMyPath(x,y,round,maxDep-1,flag);
+	}
     return res;
 }
 
@@ -258,17 +263,18 @@ int dfsMyPath(int x,int y,int round,int maxDep,bool flag){
  * x:横坐标, y:纵坐标 round:当前回合 maxDep:最大深度 flag:是否内嵌dfs
  */
 int dfsOpPath(int x,int y,int round,int maxDep,bool flag){
-	//cout<<"dfsing op path "<<x<<","<<y<<" round"<<round<<endl;
+//	cout<<"dfsing op path "<<x<<","<<y<<" round"<<round<<endl;
     int tmp=invalid[x][y];
 	invalid[x][y]=round;
-    if(round>=game.round+maxDep-1){
+    if(round>=game.round+maxDep){
         if(flag){               //搜己方
             //注意这里起点
             invalid[x][y]=tmp;
+            //cout<<"  dfs op path end."<<endl;
             return dfsMyPath(game.nextX,game.nextY,game.round+1,maxDep,false);
         }else{
             invalid[x][y]=tmp;
-            return CB(x,y)+1;   //返回评分
+            return (1<<maxDep)*(CB(x,y)+maxDep);   //返回评分
         }
 	}
 
@@ -290,9 +296,9 @@ int dfsOpPath(int x,int y,int round,int maxDep,bool flag){
 		}
 	}
 
-	if(flag&&res==INF){ //无路可走
+	if(flag&&res==INF){ //对方无路可走
 	    //cout<<"no way"<<endl;
-        return 2*dfsMyPath(game.nextX,game.nextY,game.round+1,maxDep,false);
+        return dfsOpPath(x,y,round,maxDep-1,flag);
 	}
 	invalid[x][y]=tmp;
 	return res;
@@ -311,7 +317,7 @@ int evaluate(int dir){
 	game.nextY = my.y+dy[dir];
 
     int A = 0;
-    A += dfsOpPath(op.x,op.y,game.round,6,true)*32;
+    A += dfsOpPath(op.x,op.y,game.round,3,true)*2;
     /*A += dfsOpPath(op.x,op.y,game.round,4,true)*16;
     A += dfsOpPath(op.x,op.y,game.round,3,true)*8;
     A += dfsOpPath(op.x,op.y,game.round,2,true)*4;
@@ -378,7 +384,7 @@ int getDir(){
 }
 
 int main(){
-	//freopen("input.txt","r",stdin);
+//	freopen("input.txt","r",stdin);
 	memset(invalid,0,sizeof(invalid));
 	string str;
 	string temp;
@@ -436,7 +442,8 @@ int main(){
 
  	/*cout<<"I'm now at "<<myHead().x<<","<<myHead().y<<endl;
     cout<<"He's now at "<<opponentHead().x<<","<<opponentHead().y<<endl;
-*/
+	*/
+	
 	for (int k=0;k<4;k++)
 		if (validDirection(0,k))
 			possibleDire[posCount++]=k;
