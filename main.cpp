@@ -4,13 +4,25 @@
 #include<iostream>
 #include<list>
 #include<string>
+#include<queue>
 #include<ctime>
+#include<time.h>
 #include"jsoncpp/json.h"
 using namespace std;
 
 /*
- * 智能传说大魔蛇 
+ * 智能传说大魔蛇
+ *  αβ剪枝：开 
+ *  开局修正：开
+ *  边界修正：关
+ *  自动加深：关
+ *  迭代加深卡TLE：开 1.10
+ *  主变量：开 
+ *  吸出搜索：开 0.2
  */
+
+
+//const bool DEBUG = 0;
 
 int n,m;
 const int maxn=25;
@@ -25,72 +37,104 @@ const int DOWN = 1;
 const int RIGHT = 2;
 const int UP = 3;
 
-const int SHORT = 0;
-const int LONG = 1;
+const int ME = 0;
+const int OP = 1;
+
+
+//字典树
+struct TrieNode{
+	int bestSon;
+	TrieNode *pSon[4];			//4个可能的后继的指针
+	TrieNode(){
+		for(int i=0;i<4;i++){
+			pSon[i]=NULL;
+		}
+		bestSon = -1;
+	}
+};
+
+
+struct Trie{
+	TrieNode *root;		//树根 
+	Trie(){
+		root = new TrieNode();
+	}
+	
+	//插入新的字典树节点 
+	TrieNode* insert(TrieNode *pNode, int dir){
+		pNode->pSon[dir] = new TrieNode();
+		return pNode->pSon[dir];
+	}
+}trie;
+
+
+double runTime(){
+	return (double)clock()/CLOCKS_PER_SEC;
+}
+
+
 
 struct point{
 	int x,y;
 	int createRound;	//在第几轮生成
 	point(){
-		father=NULL;
 	}
 	point(int _x,int _y,int _round=0){
 		x=_x;
 		y=_y;
 		createRound = _round;
-		father=NULL;
 	}
-	
+
 	bool equals(const point &other){
 		if(x==other.x&&y==other.y)return 1;
 		return 0;
 	}
 };
 
+
 struct Game{
 	int round;	//当前游戏回合
 	int role;	//1表示在左上角，0表示在右下角出生
 	int n;
 	int m;
-	int maxDep;
+	int maxDep;	//最大深度 
+	int hitTime;
+	double timeLimit;
+	bool TLE;	// time limit exceeded. 
+	double aspirationErr;
 }game;
 
 list<point> snake[2]; // 0表示自己的蛇，1表示对方的蛇
-int possibleDire[2][10];
-int posCount[2];
-int score[2][10][10];
 
-
-
-
-
-//
+void outputPath(){
+	cout<<"搜索到的双方最优走法:"<<endl;
+	TrieNode *cur = trie.root;
+	int dep = game.maxDep;
+	while(dep--) {
+		
+		int dir = cur->bestSon;
+		if(-1 == dir)break;
+		if(dep&1){
+			cout<<"我方走 "<<dir;
+		}else{
+			cout<<", 对方走 "<<dir<<endl;
+		}
+		cur = cur->pSon[dir];
+	}
+}
 
 /*
  * 获取双方头尾
- * 0-己方 1-对方 
+ * 0-己方 1-对方
  */
-point getHead(bool who){
+inline point getHead(bool who){
 	point p=*(snake[who].begin());
 	return p;
 }
 
-point getTail(bool who){
-	point p=*(snake[who].rbegin());
-	return p;
-}
 
-
-//双方蛇头的曼哈顿距离
-int distance(){
-	point me = getHead(0);
-	point op = getHead(1);
-	return abs(me.x-op.x)+abs(me.y-op.y);
-}
-
-
-bool whetherGrow(int num)  //本回合是否生长
-{	//注意这里回合从0开始。。。
+bool whetherGrow(int num){  //本回合是否生长
+	//注意这里回合从0开始。。。
 	if (num<=24) return true;
 	if ((num-24)%3==0) return true;
 	return false;
@@ -102,13 +146,11 @@ int whenDisappear(int createRound){
 	return 26+createRound+(createRound-1)/2;
 }
 
-void deleteEnd(int id)     //删除蛇尾
-{
+void deleteEnd(int id){     //删除蛇尾
 	snake[id].pop_back();
 }
 
-void move(int id,int dire,int num)  //编号为id的蛇朝向dire方向移动一步
-{
+void move(int id,int dire,int num){  //编号为id的蛇朝向dire方向移动一步
 	//num+2=当前回合.
 	point p=*(snake[id].begin());
 	int x=p.x+dx[dire];
@@ -117,228 +159,493 @@ void move(int id,int dire,int num)  //编号为id的蛇朝向dire方向移动一步
 	if (!whetherGrow(num))
 		deleteEnd(id);
 }
-void outputSnakeBody(int id)    //调试语句
-{
-	cout<<"Snake No."<<id<<endl;
-	for (list<point>::iterator iter=snake[id].begin();iter!=snake[id].end();++iter)
-		cout<<iter->x<<" "<<iter->y<<endl;
-	cout<<endl;
+
+
+int Ucount,Dcount,Lcount,Rcount;
+
+inline double Abs(double x){
+	if(x<0)return -x;
+	return x;
 }
 
-void body2Obstacle()   //把身体转化为障碍物
-{
-	for (int id=0;id<=1;id++)
-		for (list<point>::iterator iter=snake[id].begin();iter!=snake[id].end();++iter)
+inline int Abs(int x){
+	if(x<0)return -x;
+	return x;
+}
+
+inline bool isNearUD(){
+	point me = getHead(ME);
+	double mid;
+	if(m&1){
+		mid = (m+0.0)/2;
+	}else{
+		mid = (m+1.0)/2;
+	}
+	if(Abs(me.y-mid)<=2)return 1;
+	return 0;
+}
+
+inline bool isNearLR(){
+	point me = getHead(ME);
+	double mid;
+	if(n&1){
+		mid = (n+0.0)/2;
+	}else{
+		mid = (n+1.0)/2;
+	}
+	if(Abs(me.x-mid)<=2)return 1;
+	return 0;
+}
+
+void body2Obstacle(){   //把身体转化为障碍物
+	Ucount = Dcount = Lcount = Rcount = 0;
+	for (int id=0;id<=1;id++){
+		for (list<point>::iterator iter=snake[id].begin();iter!=snake[id].end();++iter){
 			invalid[iter->x][iter->y]=iter->createRound;
-}
-
-bool validDirection(int id,int k)  //判断当前移动方向的下一格是否合法
-{
-	point p=*(snake[id].begin());
-	int x=p.x+dx[k];
-	int y=p.y+dy[k];
-	if (x>n || y>m || x<1 || y<1) return false;
-	if (invalid[x][y]) return false;
-	return true;
-}
-
-int Rand(int p)   //随机生成一个0到p的数字
-{
-	return rand()*rand()*rand()%p;
-}
-
-
-bool CBvis[maxn][maxn];
-
-void dfs(int x,int y,int &res){
-	res++;
-	CBvis[x][y]=1;
-	for(int i=0;i<4;i++){	//4 directions
-		int nextX = x+dx[i];
-		int nextY = y+dy[i];
-		if (nextX>n || nextY>m || nextX<1 || nextY<1) continue;
-		if(!invalid[nextX][nextY]&&!CBvis[nextX][nextY]){
-			dfs(nextX,nextY,res);
+			int tmpx = iter->x;
+			int tmpy = iter->y;
+			//
+			//if(id)continue;
+			int add=1;
+			if(id)add=-1;
+			if(n&1){
+				if(tmpx<((n+1)>>1)){
+					Lcount+=add;
+				}
+				if(tmpx>((n+1)>>1)){
+					Rcount+=add;
+				}
+			}else{
+				if(tmpx<=((n)>>1)){
+					Lcount+=add;
+				}else{
+					Rcount+=add;
+				}
+			}
+			//
+			if(m&1){
+				if(tmpy<((m+1)>>1)){
+					Ucount+=add;
+				}
+				if(tmpy>((m+1)>>1)){
+					Dcount+=add;
+				}
+			}else{
+				if(tmpy<=((m)>>1)){
+					Ucount++;
+				}else{
+					Dcount++;
+				}
+			}
 		}
 	}
 }
 
-//计算连通块大小
-int CB(int x,int y){
-	memset(CBvis,0,sizeof(CBvis));
-	int res = 0;
-	dfs(x,y,res);
-	return res;
+
+int CBvis[2][maxn][maxn];
+
+//是否刚开局 
+inline bool isOpening(){
+	int x = ((n-1)>>1) + ((m-1)>>1);
+	if(game.round<=x+2)return 1;
+	return 0;
+}
+
+//使得开局倾向于往中间跑 
+void startFix(int dir,double &score){
+	if(isOpening()){
+		point me = getHead(0);
+		if(game.role==1){	//左上角
+			if(dir==RIGHT){
+				score += 1*(abs((n-1)/2-me.x)+1);
+			}else if(dir==DOWN){
+				score += 1*(abs((m-1)/2-me.y)+1);
+			}
+		}else{
+			if(dir==LEFT){
+				score += 1*(abs(me.x-(n-1)/2)+1);
+			}else if(dir==UP){
+				score += 1*(abs(me.y-(m-1)/2)+1);
+			}
+		}
+	}else{		//偷地盘。。 
+		int UD = Abs(Ucount-Dcount);
+		int LR = Abs(Lcount-Rcount);
+		
+		if(isNearUD()){
+			if(Ucount>Dcount && dir==DOWN ){
+				//cout<<"D 加成"<<endl; 
+				score+=0.001*UD;
+			}
+			if(Dcount>Ucount && dir==UP ){
+				//cout<<"U 加成"<<endl; 
+				score+=0.001*UD;
+			}
+		}
+		if(isNearLR()){
+			if(Lcount>Rcount && dir==RIGHT ){
+				//cout<<"R 加成"<<endl; 
+				score+=0.001*LR;
+			}
+			if(Rcount>Lcount && dir==LEFT ){
+				//cout<<"L 加成"<<endl; 
+				score+=0.001*LR;
+			}
+		}
+	}
+	
 }
 
 bool canMove(int x,int y,int round){
     //不能出界
-    //cout<<"in canmove "<<x<<" "<<y<<" "<<round<<endl;
     if(x>n || y>m || x<1 || y<1)return false;
     if(invalid[x][y]==INF)return false;
-
-	//cout<<"?inv is"<<invalid[x][y]<<" "<<whenDisappear(invalid[x][y]) <<" -- round is"<<round<<" --"<<endl;
     if(invalid[x][y]==0){
     	return true;
-	}else if( round+1>=whenDisappear(invalid[x][y]) ){
-        
-        return true;
-    }
-    if(invalid[x][y]>game.round && invalid[x][y]>round){
-        //cout<<" inv is"<<invalid[x][y]<<"-- round is"<<round<<" --";
-        return true;
+	}else if( round>=whenDisappear(invalid[x][y]) ){
+        if(!isOpening())return true;
     }
     return false;
 }
 
+point que[400];
 
-/*
- * 搜索路径
- * x:横坐标, y:纵坐标 round:当前回合 maxDep:最大深度 flag:是否内嵌dfs who:哪方 
- */
-int dfsPath(int x,int y,int x2,int y2,int round,int maxDep,bool flag,bool who){
-//	cout<<"dfsing path "<<x<<","<<y<<" round "<<round<<" who="<<who<<" flag="<<flag<<endl;
-	int tmp=invalid[x][y];
-	invalid[x][y]=round;
-	if(round>=game.round+maxDep){
-		invalid[x][y]=tmp;
-		if(flag){               //搜对方
-            return dfsPath(x2,y2,x,y,game.round+1,game.maxDep,false,!who);
-        }else{
-            //cout<<"dfs my path end. now score is "<<(1<<maxDep)*(CB(x,y)+maxDep)<<endl;
-            return min(64,(1<<maxDep))*(CB(x,y)+maxDep);   //返回评分
-        }
-	}
 
-	int res;
-	if(flag){
-        res=INF;
-	}else{
-	    res=0;
-	}
-	int dircnt=0;
-	for(int i=0;i<4;i++){	//4 directions
-		int nextX = x+dx[i];
-		int nextY = y+dy[i];
-		if(canMove(nextX,nextY,round)){
-			dircnt++;
-		}
-	}
-	for(int i=0;i<4;i++){	//4 directions
-		int nextX = x+dx[i];
-		int nextY = y+dy[i];
-		if(canMove(nextX,nextY,round)){
-			if(flag){
-                res=min(res,dfsPath(nextX,nextY,x2,y2,round+1,(dircnt==1?maxDep+1:maxDep),flag,who) );
-			}else{
-			    res=max(res,dfsPath(nextX,nextY,x2,y2,round+1,(dircnt==1?maxDep+1:maxDep),flag,who) );
+void bfsCB(int who,int x,int y,int round){
+	int quehead = 0;
+	int quetail = 0;
+	que[quetail++]=point(x,y);
+	CBvis[who][x][y]=0;
+	while(quetail!=quehead){
+		point cur = que[quehead++];
+		int x = cur.x;
+		int y = cur.y;
+		for(int i=0;i<4;i++){
+			int nextX = x+dx[i];
+			int nextY = y+dy[i];
+			if(CBvis[who][nextX][nextY] !=INF)continue;
+			if(canMove(nextX,nextY,round+CBvis[who][x][y] + 1)){
+				que[quetail++] = (point(nextX,nextY));
+				CBvis[who][nextX][nextY] = CBvis[who][x][y] + 1;
 			}
 		}
 	}
-	invalid[x][y]=tmp;
-	//无路可走 
-	if(flag){
-		if(res==INF)return dfsPath(x2,y2,x,y,game.round+1,game.maxDep,false,!who);
-	}else{
-		if(res==0)	return min(64,(1<<(round-game.round)))*(round-game.round) ;
-	}
-	//不要太大。。 
-	if(res>1500)return 1500;
-    return res;
 }
 
-
-bool isOpening(){
-	int x = (n-1)/2 + (m-1)/2;
-	if(game.round<=x+1)return 1;
-	return 0;
-}
-
-//
-void startFix(int dir,int &score){
-	if(!isOpening())return;
-	point me = getHead(0);
-	if(game.role==1){	//左上角 
-		if(dir==RIGHT){
-			score += abs((n-1)/2-me.x)+1;
-		}else if(dir==DOWN){
-			score += abs((m-1)/2-me.y)+1;
+double judge(int x0,int y0,int x1,int y1,int round){
+	for(int k=0;k<2;k++){
+		for(int i=1;i<=n;i++){
+			for(int j=1;j<=m;j++){
+				CBvis[k][i][j]=INF;
+			}
 		}
-	}else{
-		if(dir==LEFT){
-			score += abs(me.x-(n-1)/2)+1;
-		}else if(dir==UP){
-			score += abs(me.y-(m-1)/2)+1;
+	}
+	bfsCB(0,x0,y0,round);
+	bfsCB(1,x1,y1,round);
+	
+	int me=1;
+	int op=1;
+	for(int i=1;i<=n;i++){
+		for(int j=1;j<=m;j++){
+			if(CBvis[ME][i][j]==INF&&CBvis[OP][i][j]==INF)continue;
+			if(CBvis[ME][i][j]<CBvis[OP][i][j]){
+				me++;
+			}
+			if(CBvis[ME][i][j]>CBvis[OP][i][j]){
+				op++;
+			}
+		}
+	}
+
+	return (me+0.0)/(op+0.0)-(op+0.0)/(me+0.0);
+}
+
+
+/*
+ * dep 为偶数时，是极大节点，此时双方移动的回合数相等 
+ * 注意新增了参数pnode
+ * 该参数表明当前节点在字典树中的位置。 
+ */
+double AB(TrieNode *pNode,int &bestDir, point pt0, point pt1, double alapha, double beta, int dep){
+	// time control 
+	if(game.TLE ){
+		return -1;
+	}
+	if( (game.hitTime&1023) == 0){
+		if(runTime()>game.timeLimit){
+			game.TLE = 1;
+		}
+	}
+	game.hitTime++;
+
+	int curRound = game.round + ((game.maxDep-dep)>>1);
+	if(!(dep&1)){	//回合数相等 
+		
+		//为双方下一步着法计数
+		int myCount = 0, opCount=0;
+		for(int i=0;i<4;i++){
+			int nextX = pt0.x+dx[i];
+			int nextY = pt0.y+dy[i];
+			if(canMove(nextX,nextY,curRound+1)){
+                myCount++;
+                bestDir=i;
+            }
+		}
+		for(int i=0;i<4;i++){
+			int nextX = pt1.x+dx[i];
+			int nextY = pt1.y+dy[i];
+			if(canMove(nextX,nextY,curRound+1))opCount++;
+		}
+		
+		if(myCount+opCount == 0){	//两蛇同亡(可能没到最大深度提前终止)
+			//if(DEBUG)cout<<"tie."<<endl;
+			return 0;
+		}else if(myCount == 0){	//我无路可走(可能没到最大深度提前终止)
+			return -INF+curRound;
+		}else if(opCount == 0){	//对方无路可走(可能没到最大深度提前终止)
+			return INF-curRound;
+		}
+		
+		
+		//搜到最大深度了 
+		if(!dep){
+			double res =  judge(pt0.x,pt0.y,pt1.x,pt1.y,curRound);
+			//if(DEBUG)cout<<"normal end at"<<x0<<","<<y0 <<" score is "<<res<<endl;
+			return res;
+		} 
+	}
+	
+	double score = -INF;
+	//找出主变量,并优先搜索之
+	
+	//把以下注释就是没有PVS，取消注释就是PVS 
+	int principal = pNode->bestSon;
+	if(~principal){
+		int i = principal;
+		int nextX = pt0.x+dx[i];
+		int nextY = pt0.y+dy[i];
+		if(canMove(nextX,nextY,curRound+1)){
+			//先找下一个节点是否在之前的深度中搜过。。如果之前没有搜过，要先建立相应节点。。供深度加大时采用PVS 
+			TrieNode *pSon = pNode->pSon[i];
+			//	如果节点不存在，建立节点，建的时候分暂时为0 
+			
+			if( !pSon )pSon = trie.insert(pNode,i);	
+			
+			// make
+			int tmp = invalid[nextX][nextY];
+			invalid[nextX][nextY] = curRound+1; 
+			// make end
+			
+			int unused;
+			
+			score = -AB( pSon ,unused, pt1, point(nextX,nextY), -beta, -alapha, dep-1);
+			if(dep == game.maxDep){
+				startFix(i,score);
+			}
+			// undo make
+			invalid[nextX][nextY] = tmp;
+			// undo end
+			
+			bestDir=i;
+			if(score > alapha){
+				alapha = score;
+			}
+			
+			//维护最佳后继 
+			pNode->bestSon = i;
+			
+			//调试输出结果 
+			/*if(dep == game.maxDep){
+				if(DEBUG){
+					cout<<" --- dir = "<<i<<" score is ";
+					printf("%.4f\n",score);
+				}
+			}*/
 		}
 	}
 	
-}
+	
+	for(int i=0;i<4;i++){
+		if(score >= beta)break;			//αβpruning. 
+		if(i == principal)continue;		//主变量已经搜索过了,不要重复搜索 
+		if(score > alapha)alapha = score;
+		int nextX = pt0.x+dx[i];
+		int nextY = pt0.y+dy[i];
+		if(canMove(nextX,nextY,curRound+1)){
+			//先找下一个节点是否在之前的深度中搜过。。如果之前没有搜过，要先建立相应节点。。供深度加大时采用PVS 
+			TrieNode *pSon = pNode->pSon[i];
+			//	如果节点不存在，建立节点，建的时候分暂时为0 
+			
+			if( !pSon )pSon = trie.insert(pNode,i);	
+			
+			// make
+			int tmp = invalid[nextX][nextY];
+			invalid[nextX][nextY] = curRound+1; 
+			// make end
+			
+			int unused;
+			
+			
+			double value;
+			if(~principal){		//非主变量使用零窗
+				value = -AB( pSon ,unused, pt1, point(nextX,nextY), -alapha - 0.01, -alapha, dep-1);
+				if(dep == game.maxDep){
+					startFix(i,value);
+				}
+				if(value > score){
+					if(alapha < value && value < beta && dep > 2){
+						value = -AB( pSon ,unused, pt1, point(nextX,nextY), -beta, -value, dep-1);	//这里为了输出，写得和伪码略有出入 
+						if(dep == game.maxDep){
+							startFix(i,value);
+						}
+					}
+					score = value;
+					bestDir=i;
+					pNode->bestSon = i;
+				} 
+			}else{				//主变量不存在,则正常搜索 
+				value = -AB( pSon ,unused, pt1, point(nextX,nextY), -beta, -alapha, dep-1);
+				if(dep == game.maxDep){
+					startFix(i,value);
+				}
+			}
+			
+			// undo make
+			invalid[nextX][nextY] = tmp;
+			// undo end
 
+			if( value>score ){
+				score = value;
+				bestDir=i;
+				pNode->bestSon = i;
+			}
+			
+			
+			
+			
+			//调试输出结果 
+			/*if(dep == game.maxDep){
+				if(DEBUG){
+					cout<<" --- dir = "<<i<<" score is ";
+					printf("%.4f\n",value);
+				}
+			}*/
+		}
+		
+	}
+	
+	//如果是第一层调用，这里可以加各种修正。。 
+	if(dep == game.maxDep){
+		//Fix the score and return a better direction.
+	}
+	return score;
+} 
 
+double oldVal;
 int getDir(){
-	int MAXdire=0,MAXval=-INF;
+	int MAXdir=0;
+	double MAXval=-INF;
 	point me = getHead(0);
 	point op = getHead(1);
 	
-	//有人无路可走，直接返回 
-	if(posCount[0]==0||posCount[1]==0){
-		return possibleDire[0][0];
+	double expect = 0.0; 
+//	expect = AB(trie.root,MAXdir, me, op, -INF, INF, dep);    //不吸出 
+///*	吸出搜索 
+	if(game.maxDep == 14){
+		expect = AB(trie.root, MAXdir, me, op, -INF, INF, game.maxDep);
+	}else{
+		expect = AB(trie.root, MAXdir, me, op, oldVal-game.aspirationErr, oldVal+game.aspirationErr, game.maxDep);
+		if(expect < oldVal-game.aspirationErr){
+			expect = AB(trie.root, MAXdir, me, op, -INF, expect, game.maxDep);
+		}else if(expect > oldVal+game.aspirationErr){
+			expect = AB(trie.root, MAXdir, me, op, expect, INF, game.maxDep);
+		}		
 	}
-	
-	int minMyScore[10];
-	int minOpScore[10];
-	
-	for(int i=0;i<4;i++){
-		minMyScore[i]=INF;
-		minOpScore[i]=0;
+	oldVal = expect;
+//*/ 
+
+	/*if(DEBUG){
+		if(!game.TLE){
+			cout<<"搜索"<<game.maxDep/2 <<" 步完成. dir = "<<MAXdir; 
+			printf(" score = %.4f\n",expect);	
+			outputPath();		
+		}
+		else{
+			cout<<"搜索"<<game.maxDep/2 <<" 步中断. "<<endl;
+		}
+	}*/
+	return MAXdir;
+}
+
+
+//因为迭代加深,此函数不作处理. 
+void calcMaxDep(){
+	game.maxDep = 14;
+} 
+
+int solve(){
+	int ans=0;
+	while(1){
+		int tmp = getDir();
+		if(game.TLE){
+			break;
+		}else{
+			ans = tmp;
+		}
+		
+		double curTime = runTime();
+		if(curTime<0.1){
+			game.maxDep += 2;
+		}
+		game.maxDep += 2;
 	}
-	
-	for(int i=0;i<posCount[0];i++){
-		for(int j=0;j<posCount[1];j++){
-			int myNextX =  me.x+dx[possibleDire[0][i]];
-			int myNextY =  me.y+dy[possibleDire[0][i]];
-			int opNextX =  op.x+dx[possibleDire[1][j]];
-			int opNextY =  op.y+dy[possibleDire[1][j]];
-			//注意这里要逆过来 
-			score[0][i][j] = dfsPath(opNextX,opNextY,myNextX,myNextY,game.round+1,game.maxDep,1,1);
-			score[1][i][j] = dfsPath(myNextX,myNextY,opNextX,opNextY,game.round+1,game.maxDep,1,0);
-			//
-			minMyScore[i]=min(minMyScore[i],score[0][i][j]);
-			minOpScore[i]=max(minOpScore[i],score[1][i][j]);
-			/*cout<<"我的方向"<<possibleDire[0][i]<<" 对手方向"<<possibleDire[1][j]<<endl;
-			cout<<" ---我的得分"<<score[0][i][j]<<" 对手得分"<<score[1][i][j]<<endl;
-		*/
+	return ans;
+}
+
+//初始化,请在main函数开头调用. 
+void init(){
+	game.hitTime = 0;
+	game.timeLimit = 1.10; 
+	game.aspirationErr = 0.2;
+	calcMaxDep();
+}
+
+
+int dist2OP[maxn][maxn];
+int calcOverall(){
+	for(int i=0;i<=n+1;i++){
+		for(int j=0;j<=m+1;j++){
+			dist2OP[i][j] = INF;
 		}
 	}
-	
-	for(int i=0;i<posCount[0];i++){
-		int score = minMyScore[i];
-		
-		startFix(possibleDire[0][i],score);
-		
-		//能坑死对面 
-		if(minMyScore[i]>2*minOpScore[i])score+=INF;
-		
-		//cout<<"    dir: "<<possibleDire[0][i]<<" score: "<<score<<endl;
-		if( score>MAXval ){
-			MAXval = score;
-			MAXdire=possibleDire[0][i];
-		}else if(score == MAXval){	//相等的时候随机
-			int rnd = Rand(1357);
-			
-			if(rnd&1){
-				MAXdire=possibleDire[0][i];
+	point op = getHead(OP);
+	int quehead = 0;
+	int quetail = 0;
+	que[quetail++]=op;
+	dist2OP[op.x][op.y]=0;
+	while(quetail!=quehead){
+		point cur = que[quehead++];
+		int x = cur.x;
+		int y = cur.y;
+		for(int i=0;i<4;i++){
+			int nextX = x+dx[i];
+			int nextY = y+dy[i];
+			if(dist2OP[nextX][nextY] !=INF)continue;
+			if( !invalid[nextX][nextY] ){
+				que[quetail++] = (point(nextX,nextY));
+				dist2OP[nextX][nextY] = dist2OP[x][y] + 1;
 			}
 		}
 	}
-	return MAXdire;
 }
 
-int main(){
-//	freopen("input.txt","r",stdin);
 
-	memset(invalid,0,sizeof(invalid));
-	game.maxDep = 6;
+int main(){
+	//if(DEBUG)freopen("input.txt","r",stdin);
+	//freopen("output.txt","w",stdout);
+
+	init();
+	
 	string str;
 	string temp;
 	while (getline(cin,temp))
@@ -350,7 +657,7 @@ int main(){
 
 	n=input["requests"][(Json::Value::UInt) 0]["height"].asInt();  //棋盘高度
 	m=input["requests"][(Json::Value::UInt) 0]["width"].asInt();   //棋盘宽度
-	
+
 	int x=input["requests"][(Json::Value::UInt) 0]["x"].asInt();  //读蛇初始化的信息
 	game.role = x;
 	if (x==1){
@@ -364,8 +671,7 @@ int main(){
 	//处理地图中的障碍物
 	int obsCount=input["requests"][(Json::Value::UInt) 0]["obstacle"].size();
 
-	for (int i=0;i<obsCount;i++)
-	{
+	for (int i=0;i<obsCount;i++){
 		int ox=input["requests"][(Json::Value::UInt) 0]["obstacle"][(Json::Value::UInt) i]["x"].asInt();
 		int oy=input["requests"][(Json::Value::UInt) 0]["obstacle"][(Json::Value::UInt) i]["y"].asInt();
 		invalid[ox][oy]=INF;
@@ -374,6 +680,10 @@ int main(){
 	//根据历史信息恢复现场
 	int total=input["responses"].size();
  	game.round = total + 1;	//
+ 	
+
+ 	
+	
 	int dire;
 	for (int i=0;i<total;i++)
 	{
@@ -384,8 +694,8 @@ int main(){
 		move(1,dire,i);
 	}
 
-	if (!whetherGrow(total)) // 本回合两条蛇生长
-	{
+	if (!whetherGrow(total)){ // 本回合两条蛇生长
+	
 		deleteEnd(0);
 		deleteEnd(1);
 	}
@@ -393,28 +703,26 @@ int main(){
  	//身体转换为障碍物
  	body2Obstacle();
 	
-/*	cout<<"n = "<<n<<" m = "<<m<<endl;
-	cout<<"Current round is "<<game.round<<endl;
- 	cout<<"I'm now at "<<getHead(0).x<<","<<getHead(0).y<<endl;
-    cout<<"He's now at "<<getHead(1).x<<","<<getHead(1).y<<endl;
-*/
+	/*if(DEBUG){
+		cout<<"n = "<<n<<" m = "<<m<<endl;
+		cout<<"Current round is "<<game.round<<endl;
+	 	cout<<"I'm now at "<<getHead(0).x<<","<<getHead(0).y<<endl;
+	    cout<<"He's now at "<<getHead(1).x<<","<<getHead(1).y<<endl;
+	}*/
 
-	for(int who=0;who<2;who++){
-		for (int k=0;k<4;k++){
-			if (validDirection(who,k)){
-				possibleDire[who][posCount[who]++]=k;
-			}
-		}
-	}
-	srand((unsigned)time(0)+total);
 
 	//做出一个决策
 	Json::Value ret;
 	
+
 	
-	ret["response"]["direction"]=getDir();
+	int ans = solve();
+	
+	ret["response"]["direction"] = ans;
 
 	Json::FastWriter writer;
+	
+	//cout<<"U D L R is "<<Ucount<<" "<<Dcount<<" "<<Lcount<<" "<<Rcount<<endl;
 	cout<<writer.write(ret)<<endl;
 
 	return 0;
